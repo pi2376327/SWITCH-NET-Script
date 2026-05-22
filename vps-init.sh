@@ -17,6 +17,10 @@ sed -i "/net.ipv4.conf.all.rp_filter/d" /etc/sysctl.conf
 echo net.ipv4.conf.all.rp_filter=0 >> /etc/sysctl.conf
 sed -i "/net.ipv4.conf.default.rp_filter/d" /etc/sysctl.conf
 echo net.ipv4.conf.default.rp_filter=0 >> /etc/sysctl.conf
+sed -i "/net.core.default_qdisc=fq/d" /etc/sysctl.conf
+echo net.core.default_qdisc=fq >> /etc/sysctl.conf
+sed -i "/net.ipv4.tcp_congestion_control=bbr/d" /etc/sysctl.conf
+echo net.ipv4.tcp_congestion_control=bbr >> /etc/sysctl.conf
 sysctl -p
 
 read -n 1 -p "continue [y/n] > " char
