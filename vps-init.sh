@@ -12,15 +12,20 @@ apt install -y ca-certificates openvpn wireguard wget iptables vim iperf3 dnsuti
 
 #Turn on ip_foward,bbr-acceleration，turn off urpf
 sed -i "/net.ipv4.ip_forward=1/d" /etc/sysctl.conf
-echo net.ipv4.ip_forward=1 >> /etc/sysctl.conf
 sed -i "/net.ipv4.conf.all.rp_filter/d" /etc/sysctl.conf
-echo net.ipv4.conf.all.rp_filter=0 >> /etc/sysctl.conf
 sed -i "/net.ipv4.conf.default.rp_filter/d" /etc/sysctl.conf
-echo net.ipv4.conf.default.rp_filter=0 >> /etc/sysctl.conf
 sed -i "/net.core.default_qdisc=fq/d" /etc/sysctl.conf
-echo net.core.default_qdisc=fq >> /etc/sysctl.conf
 sed -i "/net.ipv4.tcp_congestion_control=bbr/d" /etc/sysctl.conf
+echo net.ipv4.ip_forward=1 >> /etc/sysctl.conf
+echo net.ipv4.conf.all.rp_filter=0 >> /etc/sysctl.conf
+echo net.ipv4.conf.default.rp_filter=0 >> /etc/sysctl.conf
+echo net.core.default_qdisc=fq >> /etc/sysctl.conf
 echo net.ipv4.tcp_congestion_control=bbr >> /etc/sysctl.conf
+echo net.core.rmem_max = 33554432 >> /etc/sysctl.conf
+echo net.core.wmem_max = 33554432 >> /etc/sysctl.conf
+echo net.ipv4.tcp_rmem = 4096 87380 33554432 >> /etc/sysctl.conf
+echo net.ipv4.tcp_wmem = 4096 16384 33554432 >> /etc/sysctl.conf
+echo net.ipv4.tcp_moderate_rcvbuf = 1 >> /etc/sysctl.conf
 sysctl -p
 
 read -n 1 -p "continue [y/n] > " char
