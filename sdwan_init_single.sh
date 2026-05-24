@@ -86,6 +86,11 @@ net.ipv4.conf.${INNER_IF}.rp_filter=0
 net.ipv4.conf.${OUT_IF}.rp_filter=0
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
+net.core.rmem_max = 33554432
+net.core.wmem_max = 33554432
+net.ipv4.tcp_rmem = 4096 87380 33554432
+net.ipv4.tcp_wmem = 4096 16384 33554432
+net.ipv4.tcp_moderate_rcvbuf = 1
 EOF
     sysctl -p > /dev/null 2>&1
     log_info "Sysctl configuration applied."
