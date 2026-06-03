@@ -1,8 +1,8 @@
 #!/bin/sh
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
-# 适用环境：OpenWrt 21.02 / 22.03 / 23.05 +
-# 升级特性：将模糊匹配升级为严格精确匹配，彻底解决多 Tun 混合输出导致的 RRD/算术崩溃
+# 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
+# 升级特性：引入 CPU 架构精确判定技术，x86 强制绑定 eth0，ARM 强制绑定 eth1
 # ====================================================================
 
 set -e
@@ -46,7 +46,27 @@ cat << 'OUTER_EOF' > /usr/bin/traffic_collector.sh
 #!/bin/sh
 DB_DIR="/usr/share/traffic_rrd"
 mkdir -p "$DB_DIR"
-INTERFACES="eth1 br-lan"
+
+# 核心判定：直接提取底层 CPU 架构名称
+ARCH_TYPE=$(uname -m)
+DETECTED_WAN=""
+
+case "$ARCH_TYPE" in
+    x86_64|i386|i686)
+        echo "检测到设备架构为 x86 ($ARCH_TYPE)，WAN 口默认指定为 eth0"
+        DETECTED_WAN="eth0"
+        ;;
+    aarch64*|arm*|mips*)
+        echo "检测到设备架构为 ARM/MIPS ($ARCH_TYPE)，WAN 口默认指定为 eth1"
+        DETECTED_WAN="eth1"
+        ;;
+    *)
+        # 无法识别时的安全兜底
+        DETECTED_WAN="eth0"
+        ;;
+esac
+
+INTERFACES="$DETECTED_WAN br-lan"
 
 init_rrd() {
     local iface=$1
@@ -250,8 +270,8 @@ cat << 'OUTER_EOF' > /www/speed/index.html
         }
         if(sessionStorage.getItem("cpe_auth") === "passed") { document.getElementById('loginWall').style.display = 'none'; window.onload = initSystem; }
         let appMode = 'realtime'; let currentRange = '1h'; let currentResolution = 60; let realtimeCharts = {}; let historyCharts = {}; let realtimeTimer = null; let historyTimer = null; let previousStats = {}; let previousTime = Date.now();
-        const nameMapping = { 'TUN_TOTAL': 'SDWAN专线流量图', 'eth1': 'WAN口流量图', 'br-lan': 'LAN口流量图' };
-        const orderedInterfaces = ['TUN_TOTAL', 'eth1', 'br-lan'];
+        const nameMapping = { 'TUN_TOTAL': 'SDWAN专线流量图', 'eth0': 'WAN口流量图', 'eth1': 'WAN口流量图', 'br-lan': 'LAN口流量图' };
+        const orderedInterfaces = ['TUN_TOTAL', 'eth0', 'eth1', 'br-lan'];
         function initSystem() { switchMode('realtime'); realtimeTimer = setInterval(loadRealtimeData, 2000); historyTimer = setInterval(loadHistoryData, 30000); }
         function switchMode(mode) {
             appMode = mode; document.getElementById('tab-realtime').classList.remove('active'); document.getElementById('tab-history').classList.remove('active');
@@ -266,7 +286,8 @@ cat << 'OUTER_EOF' > /www/speed/index.html
         async function loadRealtimeData() {
             try {
                 const res = await fetch('/cgi-bin/get_net_speed'); const currentStats = await res.json(); const now = Date.now(); const timeDelta = (now - previousTime) / 1000 || 1; previousTime = now; const gridContainer = document.getElementById('realtime-grid');
-                let activeIfaces = [...orderedInterfaces]; for (const key in currentStats) { if (!activeIfaces.includes(key) && key.startsWith('tun')) { activeIfaces.push(key); } }
+                let activeIfaces = []; orderedInterfaces.forEach(i => { if(currentStats[i]) activeIfaces.push(i); }); if(!activeIfaces.includes('TUN_TOTAL')) activeIfaces.unshift('TUN_TOTAL');
+                for (const key in currentStats) { if (!activeIfaces.includes(key) && key.startsWith('tun')) { activeIfaces.push(key); } }
                 activeIfaces.forEach(iface => {
                     let rxMbps = 0, txMbps = 0;
                     if (iface === 'TUN_TOTAL') {
@@ -291,7 +312,8 @@ cat << 'OUTER_EOF' > /www/speed/index.html
         async function loadHistoryData() {
             try {
                 const response = await fetch(`/cgi-bin/get_history_speed?${currentRange}&${currentResolution}`); const data = await response.json(); const gridContainer = document.getElementById('history-grid');
-                let activeIfaces = [...orderedInterfaces]; for (const key in data) { if (!activeIfaces.includes(key) && key.startsWith('tun')) { activeIfaces.push(key); } }
+                let activeIfaces = []; orderedInterfaces.forEach(i => { if(data[i]) activeIfaces.push(i); }); if(!activeIfaces.includes('TUN_TOTAL')) activeIfaces.unshift('TUN_TOTAL');
+                for (const key in data) { if (!activeIfaces.includes(key) && key.startsWith('tun')) { activeIfaces.push(key); } }
                 activeIfaces.forEach(iface => {
                     const records = data[iface] || [];
                     const labels = records.map(r => { let d = new Date(parseInt(r.time.replace(':', '')) * 1000); return currentResolution >= 300 ? `${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:${(d.getMinutes()<10?'0':'')+d.getMinutes()}` : d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}); });
@@ -331,5 +353,5 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 恭喜！多 tun 严格匹配版流量监控系统已成功安装完毕！"
+echo " 恭喜！跨平台（CPU 架构精准识别）流量监控系统已成功安装完毕！"
 echo "===================================================================="
