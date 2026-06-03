@@ -2,8 +2,9 @@
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
-# 升级特性：引入 CPU 架构精准判定技术，x86 绑定 eth0，ARM 绑定 eth1
+# 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1
 # 修复日志：完美过滤 RRDtool 的 nan 空值输出，转换为标准 0，彻底根治前端 JSON 报错空白
+# 视觉优化：将 X/Y 轴的轴线颜色替换为高显度、清晰不刺眼的浅色系，大幅提升暗色背景下的可视性
 # ====================================================================
 
 set -e
@@ -149,7 +150,7 @@ for f in "$DB_DIR"/*.rrd; do
     if [ $first -ne 1 ]; then echo ","; fi
     first=0
     echo "\"$iface\": ["
-    # 核心安全增强：通过 awk 判定，如果值为 nan 或 -nan，直接强转输出为 0，确保标准 JSON 的合法性
+    # 核心安全增强：通过 awk 判定，如果值为 nan 或 -nan，直接强转输出为 0，确保 standard JSON 的合法性
     rrdtool fetch "$f" AVERAGE -s "$TIME_RANGE" -e "now" -r "$RESOLUTION" | awk '
         NR > 2 {
             if ($1 != "") {
@@ -324,8 +325,22 @@ cat << 'OUTER_EOF' > /www/speed/index.html
                 tooltip: { trigger: 'axis', backgroundColor: 'rgba(18, 27, 46, 0.95)', borderColor: '#1e2d4a', textStyle: { color: '#f1f5f9' }, boxShadow: '0 8px 32px rgba(0,0,0,0.3)' },
                 legend: { data: ['下载 (RX)', '上行 (TX)'], bottom: 5, textStyle: { color: '#64748b', fontWeight: 500 } },
                 grid: { top: 70, bottom: 65, left: 65, right: 30 },
-                xAxis: { type: 'category', boundaryGap: false, data: labels, axisLine: { lineStyle: { color: '#1e2d4a' } }, axisLabel: { color: '#64748b' } },
-                yAxis: { type: 'value', name: 'Mbps', nameTextStyle: { color: '#64748b' }, splitLine: { lineStyle: { color: 'rgba(30, 45, 74, 0.5)', type: 'dashed' } }, axisLine: { show: true, lineStyle: { color: '#1e2d4a' } }, axisLabel: { color: '#64748b' }, minInterval: 0.5 },
+                xAxis: { 
+                    type: 'category', 
+                    boundaryGap: false, 
+                    data: labels, 
+                    axisLine: { lineStyle: { color: '#475569' } }, // 优化点：轴线颜色加亮，从 #1e2d4a 调整为 #475569，与背景区分更清晰
+                    axisLabel: { color: '#64748b' } 
+                },
+                yAxis: { 
+                    type: 'value', 
+                    name: 'Mbps', 
+                    nameTextStyle: { color: '#64748b' }, 
+                    splitLine: { lineStyle: { color: 'rgba(71, 85, 105, 0.2)', type: 'dashed' } }, // 优化点：参考加亮轴线同步微调背景虚线，使其更有轮廓感
+                    axisLine: { show: true, lineStyle: { color: '#475569' } }, // 优化点：Y 轴线同步加亮为 #475569
+                    axisLabel: { color: '#64748b' }, 
+                    minInterval: 0.5 
+                },
                 series: [
                     { name: '下载 (RX)', type: 'line', smooth: isSmooth, showSymbol: false, itemStyle: { color: '#00e676' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(0, 230, 118, 0.15)' }, { offset: 1, color: 'rgba(0, 230, 118, 0.0)' }]) }, data: rx },
                     { name: '上行 (TX)', type: 'line', smooth: isSmooth, showSymbol: false, itemStyle: { color: '#ff3d00' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(255, 61, 0, 0.1)' }, { offset: 1, color: 'rgba(255, 61, 0, 0.0)' }]) }, data: tx }
