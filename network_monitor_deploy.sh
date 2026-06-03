@@ -2,8 +2,8 @@
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
-# 升级特性：引入 CPU 架构精准判定技术，x86 绑定 eth0，ARM 绑定 eth1，前后端对齐
-# 修复日志：重构前端静态页写入逻辑，规避 Shell 文本流转义引发的语法错误
+# 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1，前后端对齐
+# 修复日志：重构 get_history_speed 的 awk 内部双引号为十六进制逃逸符，根治历史图表空白
 # ====================================================================
 
 set -e
@@ -61,7 +61,6 @@ echo "系统底层架构为: $ARCH_TYPE，已选定专用 WAN 接口: $GLOBAL_WA
 # =======================================================
 
 echo "========= [3/6] 正在生成后台定时流量统计采集器 (traffic_collector.sh) ========="
-# 使用强转义以确保 $ 符号全部原封不动传入脚本，在外部通过 sed 注入 GLOBAL_WAN
 cat << 'OUTER_EOF' > /usr/bin/traffic_collector.sh
 #!/bin/sh
 DB_DIR="/usr/share/traffic_rrd"
@@ -150,11 +149,12 @@ for f in "$DB_DIR"/*.rrd; do
     if [ $first -ne 1 ]; then echo ","; fi
     first=0
     echo "\"$iface\": ["
+    # 核心修复点：将 printf 内部的 JSON 双引号全部替换为 \x22，防止被 Shell 错误截断降维
     rrdtool fetch "$f" AVERAGE -s "$TIME_RANGE" -e "now" -r "$RESOLUTION" | awk '
         NR > 2 {
             if ($1 != "" && $2 != "nan" && $3 != "nan") {
                 sub(/:/, "", $1);
-                printf "{\"time\": \"%s\", \"rx\": %.0f, \"tx\": %.0f},\n", $1, $2*8, $3*8
+                printf "{\x22time\x22: \x22%s\x22, \x22rx\x22: %.0f, \x22tx\x22: %.0f},\n", $1, $2*8, $3*8
             }
         }
     ' | sed '$s/,$//'
@@ -179,7 +179,6 @@ chmod +x /www/cgi-bin/get_history_speed
 chmod +x /www/cgi-bin/get_net_speed
 
 echo "========= [5/6] 正在生成前端高阶主页面 (index.html) ========="
-# 关键修复点：使用 'OUTER_EOF' 纯净文本模式，防止一切网页 JS 语法在部署阶段被 Shell 误解析
 cat << 'OUTER_EOF' > /www/speed/index.html
 <!DOCTYPE html>
 <html lang="zh-CN">
