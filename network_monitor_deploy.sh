@@ -2,7 +2,7 @@
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
-# 升级特性：引入 CPU 架构精确判定技术，x86 强制绑定 eth0，ARM 强制绑定 eth1
+# 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1，前后端完美对齐
 # ====================================================================
 
 set -e
@@ -41,37 +41,34 @@ mkdir -p /usr/bin
 mkdir -p /www/cgi-bin
 mkdir -p /www/speed
 
-echo "========= [3/6] 正在生成后台定时流量统计采集器 (traffic_collector.sh) ========="
-cat << 'OUTER_EOF' > /usr/bin/traffic_collector.sh
-#!/bin/sh
-DB_DIR="/usr/share/traffic_rrd"
-mkdir -p "$DB_DIR"
-
-# 核心判定：直接提取底层 CPU 架构名称
+# ================= 架构检测核心变量定义 =================
 ARCH_TYPE=$(uname -m)
-DETECTED_WAN=""
+GLOBAL_WAN="eth0"
 
 case "$ARCH_TYPE" in
     x86_64|i386|i686)
-        echo "检测到设备架构为 x86 ($ARCH_TYPE)，WAN 口默认指定为 eth0"
-        DETECTED_WAN="eth0"
+        GLOBAL_WAN="eth0"
         ;;
     aarch64*|arm*|mips*)
-        echo "检测到设备架构为 ARM/MIPS ($ARCH_TYPE)，WAN 口默认指定为 eth1"
-        DETECTED_WAN="eth1"
+        GLOBAL_WAN="eth1"
         ;;
     *)
-        # 无法识别时的安全兜底
-        DETECTED_WAN="eth0"
+        GLOBAL_WAN="eth0"
         ;;
 esac
+# =======================================================
 
-INTERFACES="$DETECTED_WAN br-lan"
+echo "========= [3/6] 正在生成后台定时流量统计采集器 (traffic_collector.sh) ========="
+cat << OUTER_EOF > /usr/bin/traffic_collector.sh
+#!/bin/sh
+DB_DIR="/usr/share/traffic_rrd"
+mkdir -p "\$DB_DIR"
+INTERFACES="$GLOBAL_WAN br-lan"
 
 init_rrd() {
-    local iface=$1
-    if [ ! -f "$DB_DIR/$iface.rrd" ]; then
-        rrdtool create "$DB_DIR/$iface.rrd" --step 60 \
+    local iface=\$1
+    if [ ! -f "\$DB_DIR/\$iface.rrd" ]; then
+        rrdtool create "\$DB_DIR/\$iface.rrd" --step 60 \
             DS:rx:COUNTER:120:0:U \
             DS:tx:COUNTER:120:0:U \
             RRA:AVERAGE:0.5:1:4320 \
@@ -83,27 +80,27 @@ init_rrd() {
 
 # 核心修正：使用 ^%s: 进行严格的行首与冒号精确匹配，防止 tun 模糊匹配到 tun0, tun2
 get_bytes() {
-    local iface=$1
-    awk -v ifn="$iface" '$1 ~ "^"ifn":" {print $2, $10}' /proc/net/dev
+    local iface=\$1
+    awk -v ifn="\$iface" '\$1 ~ "^"ifn":" {print \$2, \$10}' /proc/net/dev
 }
 
 # 预初始化默认主接口和总计通道
-for i in $INTERFACES TUN_TOTAL; do init_rrd "$i"; done
+for i in \$INTERFACES TUN_TOTAL; do init_rrd "\$i"; done
 
 # 动态发现当前所有的 tun 接口并初始化 RRD 数据库
-for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do 
-    init_rrd "$tun"; 
+for tun in \$(awk -F: 'NR>2 {print \$1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do 
+    init_rrd "\$tun"; 
 done
 
 # 采集主物理接口流量
-for iface in $INTERFACES; do
-    stats=$(get_bytes "$iface")
-    if [ -n "$stats" ]; then
-        rx=$(echo "$stats" | awk '{print $1}')
-        tx=$(echo "$stats" | awk '{print $2}')
-        [ -z "$rx" ] && rx=0
-        [ -z "$tx" ] && tx=0
-        rrdtool update "$DB_DIR/$iface.rrd" N:"$rx":"$tx"
+for iface in \$INTERFACES; do
+    stats=\$(get_bytes "\$iface")
+    if [ -n "\$stats" ]; then
+        rx=\$(echo "\$stats" | awk '{print \$1}')
+        tx=\$(echo "\$stats" | awk '{print \$2}')
+        [ -z "\$rx" ] && rx=0
+        [ -z "\$tx" ] && tx=0
+        rrdtool update "\$DB_DIR/\$iface.rrd" N:"\$rx":"\$tx"
     fi
 done
 
@@ -111,31 +108,31 @@ done
 total_rx=0
 total_tx=0
 
-for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do
-    stats=$(get_bytes "$tun")
-    if [ -n "$stats" ]; then
-        rx=$(echo "$stats" | awk '{print $1}')
-        tx=$(echo "$stats" | awk '{print $2}')
+for tun in \$(awk -F: 'NR>2 {print \$1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do
+    stats=\$(get_bytes "\$tun")
+    if [ -n "\$stats" ]; then
+        rx=\$(echo "\$stats" | awk '{print \$1}')
+        tx=\$(echo "\$stats" | awk '{print \$2}')
         
         # 兜底清理
-        rx=${rx:-0}
-        tx=${tx:-0}
+        rx=\${rx:-0}
+        tx=\${tx:-0}
         
         # 确保完全是单行纯数字
-        echo "$rx" | grep -q '^[0-9]\+$' || rx=0
-        echo "$tx" | grep -q '^[0-9]\+$' || tx=0
+        echo "\$rx" | grep -q '^[0-9]\+$' || rx=0
+        echo "\$tx" | grep -q '^[0-9]\+$' || tx=0
 
-        rrdtool update "$DB_DIR/$tun.rrd" N:"$rx":"$tx" 2>/dev/null || true
+        rrdtool update "\$DB_DIR/\$tun.rrd" N:"\$rx":"\$tx" 2>/dev/null || true
         
         # 安全算术累加
-        total_rx=$((total_rx + rx))
-        total_tx=$((total_tx + tx))
+        total_rx=\$((total_rx + rx))
+        total_tx=\$((total_tx + tx))
     fi
 done
 
 # 如果总专线聚合流量有产生数据，则将其更新至物理总表
-if [ $total_rx -gt 0 ] || [ $total_tx -gt 0 ]; then
-    rrdtool update "$DB_DIR/TUN_TOTAL.rrd" N:"$total_rx":"$total_tx"
+if [ \$total_rx -gt 0 ] || [ \$total_tx -gt 0 ]; then
+    rrdtool update "\$DB_DIR/TUN_TOTAL.rrd" N:"\$total_rx":"\$total_tx"
 fi
 OUTER_EOF
 
@@ -190,7 +187,7 @@ chmod +x /www/cgi-bin/get_history_speed
 chmod +x /www/cgi-bin/get_net_speed
 
 echo "========= [5/6] 正在生成前端高阶主页面 (index.html) ========="
-cat << 'OUTER_EOF' > /www/speed/index.html
+cat << OUTER_EOF > /www/speed/index.html
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -270,8 +267,11 @@ cat << 'OUTER_EOF' > /www/speed/index.html
         }
         if(sessionStorage.getItem("cpe_auth") === "passed") { document.getElementById('loginWall').style.display = 'none'; window.onload = initSystem; }
         let appMode = 'realtime'; let currentRange = '1h'; let currentResolution = 60; let realtimeCharts = {}; let historyCharts = {}; let realtimeTimer = null; let historyTimer = null; let previousStats = {}; let previousTime = Date.now();
-        const nameMapping = { 'TUN_TOTAL': 'SDWAN专线流量图', 'eth0': 'WAN口流量图', 'eth1': 'WAN口流量图', 'br-lan': 'LAN口流量图' };
-        const orderedInterfaces = ['TUN_TOTAL', 'eth0', 'eth1', 'br-lan'];
+        
+        // 核心修正：前端图表映射与排序队列同步根据架构动态精准渲染，杜绝重复多出 WAN 图表
+        const nameMapping = { 'TUN_TOTAL': 'SDWAN专线流量图', '$GLOBAL_WAN': 'WAN口流量图', 'br-lan': 'LAN口流量图' };
+        const orderedInterfaces = ['TUN_TOTAL', '$GLOBAL_WAN', 'br-lan'];
+
         function initSystem() { switchMode('realtime'); realtimeTimer = setInterval(loadRealtimeData, 2000); historyTimer = setInterval(loadHistoryData, 30000); }
         function switchMode(mode) {
             appMode = mode; document.getElementById('tab-realtime').classList.remove('active'); document.getElementById('tab-history').classList.remove('active');
@@ -325,7 +325,7 @@ cat << 'OUTER_EOF' > /www/speed/index.html
         }
         function changeHistoryRange(range, resolution, btn) { currentRange = range; currentResolution = resolution; document.querySelectorAll('.control-row button').forEach(b => b.classList.remove('active')); btn.classList.add('active'); document.getElementById('history-grid').innerHTML = ''; historyCharts = {}; loadHistoryData(); }
         function renderEChart(chartInstance, iface, labels, rx, tx, isSmooth) {
-            let labelName = nameMapping[iface] || `TUN口流量图 (${iface})`;
+            let labelName = nameMapping[iface] || `TUN口流量图 (\${iface})`;
             chartInstance.setOption({
                 backgroundColor: 'transparent', title: { text: labelName, left: 'center', top: 5, textStyle: { color: '#f1f5f9', fontSize: 16, fontWeight: 'bold' } },
                 tooltip: { trigger: 'axis', backgroundColor: 'rgba(18, 27, 46, 0.95)', borderColor: '#1e2d4a', textStyle: { color: '#f1f5f9' }, boxShadow: '0 8px 32px rgba(0,0,0,0.3)' },
@@ -353,7 +353,5 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 恭喜！SDWAN CPE 流量监控系统已成功执行[纯净覆盖安装]！"
-echo " 访问路径：http://<你的路由器IP>/speed/index.html"
-echo " 预设凭证：admin / admin888"
+echo " 恭喜！跨平台（前后端完备一体化）流量监控系统已成功安装完毕！"
 echo "===================================================================="
