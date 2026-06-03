@@ -308,3 +308,71 @@ cat << 'EOF' > /www/speed/index.html
                 for (const key in data) { if (!activeIfaces.includes(key) && key.startsWith('tun')) { activeIfaces.push(key); } }
                 activeIfaces.forEach(iface => {
                     const records = data[iface] || [];
+                    const labels = records.map(r => { let d = new Date(parseInt(r.time.replace(':', '')) * 1000); return currentResolution >= 300 ? `${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:${(d.getMinutes()<10?'0':'')+d.getMinutes()}` : d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}); });
+                    const rxData = records.map(r => parseFloat((r.rx / 1024 / 1024).toFixed(2))); const txData = records.map(r => parseFloat((r.tx / 1024 / 1024).toFixed(2)));
+                    if (!historyCharts[iface]) { const card = document.createElement('div'); card.className = 'chart-card'; card.id = `hi-chart-${iface}`; gridContainer.appendChild(card); historyCharts[iface] = echarts.init(card, 'dark'); }
+                    renderEChart(historyCharts[iface], iface, labels, rxData, txData, false);
+                });
+            } catch (e) { console.error(e); }
+        }
+        function changeHistoryRange(range, resolution, btn) { currentRange = range; currentResolution = resolution; document.querySelectorAll('.control-row button').forEach(b => b.classList.remove('active')); btn.classList.add('active'); document.getElementById('history-grid').innerHTML = ''; historyCharts = {}; loadHistoryData(); }
+        function renderEChart(chartInstance, iface, labels, rx, tx, isRealtime) {
+            let labelName = nameMapping[iface] || `TUN口流量图 (${iface})`;
+            chartInstance.setOption({
+                backgroundColor: 'transparent', title: { text: labelName, left: 'center', top: 5, textStyle: { color: '#f1f5f9', fontSize: 16, fontWeight: 'bold' } },
+                tooltip: { trigger: 'axis', backgroundColor: 'rgba(18, 27, 46, 0.95)', borderColor: '#1e2d4a', textStyle: { color: '#f1f5f9' }, boxShadow: '0 8px 32px rgba(0,0,0,0.3)' },
+                legend: { data: ['下载 (RX)', '上行 (TX)'], bottom: 5, textStyle: { color: '#94a3b8', fontWeight: 500 } },
+                grid: { top: 70, bottom: isRealtime ? 65 : 85, left: 65, right: 30 },
+                xAxis: { 
+                    type: 'category', 
+                    boundaryGap: false, 
+                    data: labels, 
+                    axisLine: { lineStyle: { color: '#1e2d4a' } }, 
+                    axisLabel: { 
+                        color: '#94a3b8',
+                        rotate: isRealtime ? 0 : 90,
+                        interval: isRealtime ? 'auto' : 0
+                    },
+                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'solid' } }
+                },
+                yAxis: { 
+                    type: 'value', 
+                    name: 'Mbps', 
+                    nameTextStyle: { color: '#94a3b8' }, 
+                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'dashed' } },
+                    axisLine: { show: true, lineStyle: { color: '#1e2d4a' } }, 
+                    axisLabel: { color: '#94a3b8' }, 
+                    minInterval: 0.5 
+                },
+                series: [
+                    { name: '下载 (RX)', type: 'line', smooth: isRealtime, showSymbol: false, itemStyle: { color: '#00e676' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(0, 230, 118, 0.15)' }, { offset: 1, color: 'rgba(0, 230, 118, 0.0)' }]) }, data: rx },
+                    { name: '上行 (TX)', type: 'line', smooth: isRealtime, showSymbol: false, itemStyle: { color: '#ff3d00' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(255, 61, 0, 0.1)' }, { offset: 1, color: 'rgba(255, 61, 0, 0.0)' }]) }, data: tx }
+                ]
+            });
+        }
+        window.addEventListener('resize', () => { for (let k in realtimeCharts) realtimeCharts[k].resize(); for (let k in historyCharts) historyCharts[k].resize(); });
+    </script>
+</body>
+</html>
+EOF
+
+# 精准替换网页中的 WAN 接口动态映射
+sed -i "s/TARGET_WAN/$GLOBAL_WAN/g" /www/speed/index.html
+
+echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务模块 ========="
+# 重新将纯净的采集指令挂载入宿主机 Crontab
+(crontab -l 2>/dev/null; echo "* * * * * /usr/bin/traffic_collector.sh") | crontab -
+
+# 强制重启系统的 cron 计划任务引擎，确保立刻生效
+/etc/init.d/cron restart
+
+# 运行采集器
+sh /usr/bin/traffic_collector.sh
+
+echo "===================================================================="
+echo " 流量监控系统部署/覆盖成功！请使用以下默认凭据访问前端控制台："
+echo " ------------------------------------------------------------------"
+echo " 访问路径: http://路由器IP/speed/"
+echo " 管理账号: admin"
+echo " 访问密码: admin888"
+echo "===================================================================="
