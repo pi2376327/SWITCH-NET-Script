@@ -3,7 +3,7 @@
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
 # 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1
-# 修复日志：彻底修复 EOF 块内嵌套符号导致的 unterminated quoted string 语法错误
+# 修复日志：解除历史模式横轴强制全显示的限制，启用弹性自动抽稀算法，完美解决长周期重叠问题
 # ====================================================================
 
 set -e
@@ -331,7 +331,7 @@ cat << 'EOF' > /www/speed/index.html
                     axisLabel: { 
                         color: '#94a3b8',
                         rotate: isRealtime ? 0 : 90,
-                        interval: isRealtime ? 'auto' : 0
+                        interval: 'auto' // 关键修复：让ECharts自动根据时间长度做等间距抽稀展示，绝不破坏底层1分钟一个点的精度
                     },
                     splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'solid' } }
                 },
