@@ -3,7 +3,7 @@
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
 # 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1
-# 修复日志：1. 拓宽全局画布至 1650px；2. 注入 xAxis.axisLabel.formatter 动态跨周期脱敏格式化算法
+# 修复日志：1. 回退至标准竖排轴模型；2. 画布扩宽至1650px；3. 纵向卡片加高至480px且大拉留白；4. 超过30天自动隐藏时间
 # ====================================================================
 
 set -e
@@ -194,7 +194,7 @@ cat << 'EOF' > /www/speed/index.html
             --theme-green: #00e676; --theme-red: #ff3d00;
         }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-main); color: var(--text-main); padding: 30px; margin: 0; -webkit-font-smoothing: antialiased; }
-        .container { max-width: 1650px; margin: 0 auto; } /* 需求1：适度拉宽表格与整体容器，增加舒展度 */
+        .container { max-width: 1650px; margin: 0 auto; } /* 需求1：网页最大宽度扩展至 1650px */
         .login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-main); z-index: 9999; display: flex; justify-content: center; align-items: center; }
         .login-box { background: var(--bg-card); border: 1px solid var(--border-color); padding: 40px; border-radius: 12px; width: 320px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
         .login-box h2 { margin-top: 0; font-size: 1.3rem; color: var(--theme-blue); margin-bottom: 25px; font-weight: 600; }
@@ -213,7 +213,7 @@ cat << 'EOF' > /www/speed/index.html
         .control-row button:hover { color: var(--text-main); }
         .control-row button.active { background: #1e2d4a; color: var(--theme-blue); font-weight: 600; }
         .chart-grid { display: grid; grid-template-columns: 1fr; gap: 25px; }
-        .chart-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; height: 400px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2); }
+        .chart-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; height: 480px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2); } /* 需求2：图标总高度拉长至 480px */
         #realtime-grid { display: grid; } #history-grid { display: none; }
     </style>
 </head>
@@ -308,8 +308,7 @@ cat << 'EOF' > /www/speed/index.html
                 for (const key in data) { if (!activeIfaces.includes(key) && key.startsWith('tun')) { activeIfaces.push(key); } }
                 activeIfaces.forEach(iface => {
                     const records = data[iface] || [];
-                    // 将原始 unix 时间戳统一封装进 labels
-                    const labels = records.map(r => r.time.replace(':', ''));
+                    const labels = records.map(r => { let d = new Date(parseInt(r.time.replace(':', '')) * 1000); return d; });
                     const rxData = records.map(r => parseFloat((r.rx / 1024 / 1024).toFixed(2))); const txData = records.map(r => parseFloat((r.tx / 1024 / 1024).toFixed(2)));
                     if (!historyCharts[iface]) { const card = document.createElement('div'); card.className = 'chart-card'; card.id = `hi-chart-${iface}`; gridContainer.appendChild(card); historyCharts[iface] = echarts.init(card, 'dark'); }
                     renderEChart(historyCharts[iface], iface, labels, rxData, txData, false);
@@ -320,10 +319,7 @@ cat << 'EOF' > /www/speed/index.html
         function renderEChart(chartInstance, iface, labels, rx, tx, isRealtime) {
             let labelName = nameMapping[iface] || `TUN口流量图 (${iface})`;
             
-            // 每次渲染独立维护一个日期状态追踪器，防止多网卡渲染污染
-            let dateTracker = {}; 
-            
-            // 将当前选择的时间周期转化为天数进行区间度量
+            // 计算当前选定的历史跨度（天数）
             let days = 0;
             if (!isRealtime) {
                 const num = parseInt(currentRange);
@@ -341,21 +337,18 @@ cat << 'EOF' > /www/speed/index.html
                     textStyle: { color: '#f1f5f9' }, 
                     boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
                     formatter: function(params) {
-                        // 保证浮动提示框（Tooltip）永远展现最完整、未脱敏的时间全貌，保留细粒度追溯能力
                         let axisVal = params[0].axisValue;
-                        if (!isRealtime && !isNaN(axisVal)) {
-                            let d = new Date(parseInt(axisVal) * 1000);
-                            axisVal = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+                        if (!isRealtime && axisVal instanceof Date) {
+                            axisVal = `${axisVal.getFullYear()}-${String(axisVal.getMonth()+1).padStart(2,'0')}-${String(axisVal.getDate()).padStart(2,'0')} ${String(axisVal.getHours()).padStart(2,'0')}:${String(axisVal.getMinutes()).padStart(2,'0')}`;
                         }
                         let res = `<span style="color:#94a3b8;font-size:0.85rem;">${axisVal}</span><br/>`;
-                        params.forEach(p => {
-                            res += `<span style="color:${p.color};">●</span> ${p.seriesName}: <b>${p.value} Mbps</b><br/>`;
-                        });
+                        params.forEach(p => { res += `<span style="color:${p.color};">●</span> ${p.seriesName}: <b>${p.value} Mbps</b><br/>`; });
                         return res;
                     }
                 },
                 legend: { data: ['下载 (RX)', '上行 (TX)'], bottom: 5, textStyle: { color: '#94a3b8', fontWeight: 500 } },
-                grid: { top: 70, bottom: 65, left: 65, right: 30 },
+                // 需求2：完美适配纵向文字长度，将 grid.bottom 彻底拉开至 115px 确保文字完全露出来不被裁切
+                grid: { top: 70, bottom: isRealtime ? 65 : 115, left: 65, right: 30 },
                 xAxis: { 
                     type: 'category', 
                     boundaryGap: false, 
@@ -363,36 +356,18 @@ cat << 'EOF' > /www/speed/index.html
                     axisLine: { lineStyle: { color: '#1e2d4a' } }, 
                     axisLabel: { 
                         color: '#94a3b8',
-                        rotate: 0, // 抽稀后彻底放平横坐标，提高感官舒适度
-                        interval: 'auto', // 需求1：保持原自适应抽稀规律，表格拉宽也不会导致坐标密集度反弹
-                        formatter: function(value, index) {
+                        rotate: isRealtime ? 0 : 90, // 回退至经典垂直向下排列，确保点线严格对齐
+                        interval: 'auto', // 弹性自适应抽稀，防止表格变宽导致坐标拥挤反弹
+                        formatter: function(value) {
                             if (isRealtime) return value;
-                            if (isNaN(value)) return value;
+                            if (!(value instanceof Date)) return value;
                             
-                            let d = new Date(parseInt(value) * 1000);
-                            let monthDay = `${d.getMonth() + 1}-${d.getDate()}`;
-                            let hourMinute = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
-                            
-                            // 需求2适配方案：
-                            // 方案 A：超过 30 天（1个月），只看宏观趋势，仅显示日期
+                            // 需求3：超过30天的数据不显示具体时间，仅展示日期
                             if (days > 30) {
-                                if (!dateTracker[monthDay]) {
-                                    dateTracker[monthDay] = true;
-                                    return monthDay;
-                                }
-                                return '';
-                            }
-                            // 方案 B：在 1 天以上，30 天以内（如 2d, 7d, 15d, 30d）
-                            else if (days > 1) {
-                                if (!dateTracker[monthDay]) {
-                                    dateTracker[monthDay] = true;
-                                    return monthDay; // 本自然日第一次出现：展示日期
-                                }
-                                return hourMinute; // 本自然日非首次出现：优雅降级只展示时间
-                            }
-                            // 方案 C：1 天以内的短周期历史数据，全部只展示时间
-                            else {
-                                return hourMinute;
+                                return `${value.getMonth() + 1}-${value.getDate()}`;
+                            } else {
+                                // 30天内显示标准的 日期 + 时间
+                                return `${value.getMonth() + 1}-${value.getDate()} ${String(value.getHours()).padStart(2,'0')}:${String(value.getMinutes()).padStart(2,'0')}`;
                             }
                         }
                     },
