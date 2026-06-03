@@ -2,7 +2,7 @@
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 +
-# 升级特性：使用管道重构底层采集架构，彻底根除 Heredoc 嵌套语法冲突 Bug
+# 升级特性：将模糊匹配升级为严格精确匹配，彻底解决多 Tun 混合输出导致的 RRD/算术崩溃
 # ====================================================================
 
 set -e
@@ -42,7 +42,6 @@ mkdir -p /www/cgi-bin
 mkdir -p /www/speed
 
 echo "========= [3/6] 正在生成后台定时流量统计采集器 (traffic_collector.sh) ========="
-# 核心修正：这里只管生成纯净的采集脚本，内部绝无嵌套 EOF
 cat << 'OUTER_EOF' > /usr/bin/traffic_collector.sh
 #!/bin/sh
 DB_DIR="/usr/share/traffic_rrd"
@@ -62,36 +61,59 @@ init_rrd() {
     fi
 }
 
+# 核心修正：使用 ^%s: 进行严格的行首与冒号精确匹配，防止 tun 模糊匹配到 tun0, tun2
 get_bytes() {
     local iface=$1
-    awk -v ifn="$iface" '$1 ~ ifn {sub(/:/, "", $1); print $2, $10}' /proc/net/dev
+    awk -v ifn="$iface" '$1 ~ "^"ifn":" {print $2, $10}' /proc/net/dev
 }
 
+# 预初始化默认主接口和总计通道
 for i in $INTERFACES TUN_TOTAL; do init_rrd "$i"; done
-for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do init_rrd "$tun"; done
 
-# 用管道（Pipeline）安全代替历史遗留的嵌套 Heredoc
+# 动态发现当前所有的 tun 接口并初始化 RRD 数据库
+for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do 
+    init_rrd "$tun"; 
+done
+
+# 采集主物理接口流量
 for iface in $INTERFACES; do
     stats=$(get_bytes "$iface")
     if [ -n "$stats" ]; then
         rx=$(echo "$stats" | awk '{print $1}')
         tx=$(echo "$stats" | awk '{print $2}')
+        [ -z "$rx" ] && rx=0
+        [ -z "$tx" ] && tx=0
         rrdtool update "$DB_DIR/$iface.rrd" N:"$rx":"$tx"
     fi
 done
 
-total_rx=0; total_tx=0
+# 采集多 tun 虚拟接口流量
+total_rx=0
+total_tx=0
+
 for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do
     stats=$(get_bytes "$tun")
     if [ -n "$stats" ]; then
         rx=$(echo "$stats" | awk '{print $1}')
         tx=$(echo "$stats" | awk '{print $2}')
-        rrdtool update "$DB_DIR/$tun.rrd" N:"$rx":"$tx"
+        
+        # 兜底清理
+        rx=${rx:-0}
+        tx=${tx:-0}
+        
+        # 确保完全是单行纯数字
+        echo "$rx" | grep -q '^[0-9]\+$' || rx=0
+        echo "$tx" | grep -q '^[0-9]\+$' || tx=0
+
+        rrdtool update "$DB_DIR/$tun.rrd" N:"$rx":"$tx" 2>/dev/null || true
+        
+        # 安全算术累加
         total_rx=$((total_rx + rx))
         total_tx=$((total_tx + tx))
     fi
 done
 
+# 如果总专线聚合流量有产生数据，则将其更新至物理总表
 if [ $total_rx -gt 0 ] || [ $total_tx -gt 0 ]; then
     rrdtool update "$DB_DIR/TUN_TOTAL.rrd" N:"$total_rx":"$total_tx"
 fi
@@ -157,51 +179,22 @@ cat << 'OUTER_EOF' > /www/speed/index.html
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <style>
         :root {
-            --bg-main: #0b111e; 
-            --bg-card: #121b2e; 
-            --border-color: #1e2d4a;
-            --text-main: #f1f5f9; 
-            --text-muted: #64748b; 
-            --theme-blue: #38bdf8;
-            --theme-green: #00e676; 
-            --theme-red: #ff3d00;
+            --bg-main: #0b111e; --bg-card: #121b2e; --border-color: #1e2d4a;
+            --text-main: #f1f5f9; --text-muted: #64748b; --theme-blue: #38bdf8;
+            --theme-green: #00e676; --theme-red: #ff3d00;
         }
-        body { 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-            background-color: var(--bg-main); 
-            color: var(--text-main); 
-            padding: 30px; 
-            margin: 0; 
-            -webkit-font-smoothing: antialiased; 
-        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-main); color: var(--text-main); padding: 30px; margin: 0; -webkit-font-smoothing: antialiased; }
         .container { max-width: 1400px; margin: 0 auto; }
-        .login-overlay { 
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-            background: var(--bg-main); z-index: 9999; 
-            display: flex; justify-content: center; align-items: center; 
-        }
-        .login-box { 
-            background: var(--bg-card); border: 1px solid var(--border-color); padding: 40px; 
-            border-radius: 12px; width: 320px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); 
-        }
+        .login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg-main); z-index: 9999; display: flex; justify-content: center; align-items: center; }
+        .login-box { background: var(--bg-card); border: 1px solid var(--border-color); padding: 40px; border-radius: 12px; width: 320px; text-align: center; box-shadow: 0 20px 50px rgba(0,0,0,0.5); }
         .login-box h2 { margin-top: 0; font-size: 1.3rem; color: var(--theme-blue); margin-bottom: 25px; font-weight: 600; }
-        .login-box input { 
-            width: 100%; padding: 11px; margin-bottom: 15px; border-radius: 6px; box-sizing: border-box; 
-            border: 1px solid var(--border-color); background: #16223b; color: #fff; outline: none; 
-        }
+        .login-box input { width: 100%; padding: 11px; margin-bottom: 15px; border-radius: 6px; box-sizing: border-box; border: 1px solid var(--border-color); background: #16223b; color: #fff; outline: none; }
         .login-box button { width: 100%; background: var(--theme-blue); color: #0b111e; font-weight: bold; border: none; padding: 11px; border-radius: 6px; cursor: pointer; transition: 0.2s; }
         .login-box button:hover { background: #0ea5e9; }
         .header-panel { text-align: center; margin-bottom: 25px; }
-        h1 { 
-            font-size: 2.2rem; font-weight: 700; letter-spacing: 1px; 
-            background: linear-gradient(to right, #38bdf8, #00e676); 
-            -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; 
-        }
+        h1 { font-size: 2.2rem; font-weight: 700; letter-spacing: 1px; background: linear-gradient(to right, #38bdf8, #00e676); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
         .navigation-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 25px; }
-        .nav-tab { 
-            background: #16223b; color: var(--text-muted); border: 1px solid var(--border-color); 
-            padding: 10px 24px; font-size: 0.95rem; font-weight: 600; border-radius: 6px; cursor: pointer; transition: 0.2s; 
-        }
+        .nav-tab { background: #16223b; color: var(--text-muted); border: 1px solid var(--border-color); padding: 10px 24px; font-size: 0.95rem; font-weight: 600; border-radius: 6px; cursor: pointer; transition: 0.2s; }
         .nav-tab:hover { color: var(--text-main); }
         .nav-tab.active { background: #1e2d4a; color: var(--theme-green); border-color: var(--theme-green); box-shadow: 0 4px 15px rgba(0,230,118,0.15); }
         .btn-wrapper { text-align: center; width: 100%; margin-bottom: 30px; display: none; }
@@ -211,8 +204,7 @@ cat << 'OUTER_EOF' > /www/speed/index.html
         .control-row button.active { background: #1e2d4a; color: var(--theme-blue); font-weight: 600; }
         .chart-grid { display: grid; grid-template-columns: 1fr; gap: 25px; }
         .chart-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; height: 380px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2); }
-        #realtime-grid { display: grid; } 
-        #history-grid { display: none; }
+        #realtime-grid { display: grid; } #history-grid { display: none; }
     </style>
 </head>
 <body>
@@ -335,11 +327,9 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 # 重新将纯净的采集指令挂载入宿主机 Crontab
 (crontab -l 2>/dev/null; echo "* * * * * /usr/bin/traffic_collector.sh") | crontab -
 
-# 立即手动预热拉起一次采集器，防止初始图表为空白
-/usr/bin/traffic_collector.sh
+# 运行采集器
+sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 恭喜！SDWAN CPE 流量监控系统已成功执行[纯净覆盖安装]！"
-echo " 访问路径：http://<你的路由器IP>/speed/"
-echo " 预设凭证：admin / admin888"
+echo " 恭喜！多 tun 严格匹配版流量监控系统已成功安装完毕！"
 echo "===================================================================="
