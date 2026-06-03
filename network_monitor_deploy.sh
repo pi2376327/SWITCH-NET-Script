@@ -2,8 +2,8 @@
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
-# 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1，前后端对齐
-# 修复日志：重构 get_history_speed 的 awk 内部双引号为十六进制逃逸符，根治历史图表空白
+# 升级特性：引入 CPU 架构精准判定技术，x86 绑定 eth0，ARM 绑定 eth1
+# 修复日志：完美过滤 RRDtool 的 nan 空值输出，转换为标准 0，彻底根治前端 JSON 报错空白
 # ====================================================================
 
 set -e
@@ -149,12 +149,14 @@ for f in "$DB_DIR"/*.rrd; do
     if [ $first -ne 1 ]; then echo ","; fi
     first=0
     echo "\"$iface\": ["
-    # 核心修复点：将 printf 内部的 JSON 双引号全部替换为 \x22，防止被 Shell 错误截断降维
+    # 核心安全增强：通过 awk 判定，如果值为 nan 或 -nan，直接强转输出为 0，确保标准 JSON 的合法性
     rrdtool fetch "$f" AVERAGE -s "$TIME_RANGE" -e "now" -r "$RESOLUTION" | awk '
         NR > 2 {
-            if ($1 != "" && $2 != "nan" && $3 != "nan") {
+            if ($1 != "") {
                 sub(/:/, "", $1);
-                printf "{\x22time\x22: \x22%s\x22, \x22rx\x22: %.0f, \x22tx\x22: %.0f},\n", $1, $2*8, $3*8
+                val_rx = ($2 ~ /nan/) ? 0 : $2 * 8;
+                val_tx = ($3 ~ /nan/) ? 0 : $3 * 8;
+                printf "{\x22time\x22: \x22%s\x22, \x22rx\x22: %.0f, \x22tx\x22: %.0f},\n", $1, val_rx, val_tx
             }
         }
     ' | sed '$s/,$//'
@@ -342,6 +344,9 @@ sed -i "s/TARGET_WAN/$GLOBAL_WAN/g" /www/speed/index.html
 echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务模块 ========="
 # 重新将纯净的采集指令挂载入宿主机 Crontab
 (crontab -l 2>/dev/null; echo "* * * * * /usr/bin/traffic_collector.sh") | crontab -
+
+# 强制重启系统的 cron 计划任务引擎，确保立刻生效
+/etc/init.d/cron restart
 
 # 运行采集器
 sh /usr/bin/traffic_collector.sh
