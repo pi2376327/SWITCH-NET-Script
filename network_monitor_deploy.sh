@@ -1,8 +1,8 @@
 #!/bin/sh
 # ====================================================================
-# SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
+# SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本 (2026 稳定版)
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 +
-# 核心修正：取消函数嵌套，改用单行精确 awk + 强力脱水清洗，消灭一切多行换行符
+# 升级特性：采用无函数扁平化架构，彻底解决多 Tun 行匹配冲突与算术语法 Bug
 # ====================================================================
 
 set -e
@@ -18,7 +18,7 @@ fi
 # 2. 强制终止当前可能正在后台运行的旧版采集实例
 killall traffic_collector.sh 2>/dev/null || true
 
-# 3. 彻底清空历史安装路径及旧的前端残留文件
+# 3. 强行抹除旧系统文件与 RRD 历史数据库
 echo "正在强力抹除旧系统文件与 RRD 历史数据库..."
 rm -rf /usr/share/traffic_rrd
 rm -f /usr/bin/traffic_collector.sh
@@ -29,8 +29,7 @@ rm -rf /www/speed
 echo "========= [2/6] 正在初始化全新环境及依赖环境校验 ========="
 if ! command -v rrdtool >/dev/null 2>&1; then
     echo "未检测到 rrdtool，正在尝试从 opkg 软件源进行自动拉取安装..."
-    opkg update
-    opkg install rrdtool awk
+    opkg update && opkg install rrdtool awk
 else
     echo "RRDtool 环境检查正常，跳过安装。"
 fi
@@ -42,7 +41,9 @@ mkdir -p /www/cgi-bin
 mkdir -p /www/speed
 
 echo "========= [3/6] 正在生成后台定时流量统计采集器 (traffic_collector.sh) ========="
-cat << 'OUTER_EOF' > /usr/bin/traffic_collector.sh
+
+# 使用强转义符号防止粘贴时被本地终端提前解析
+cat << 'EOF' > /usr/bin/traffic_collector.sh
 #!/bin/sh
 DB_DIR="/usr/share/traffic_rrd"
 mkdir -p "$DB_DIR"
@@ -71,11 +72,11 @@ done
 
 # --- 物理接口数据采集 ---
 for iface in $INTERFACES; do
-    # 核心升级：直接通过精确匹配整行行首提取，tr -d 清除可能导致 RRD 报非纯数字的换行/回车符
+    # 使用严格的行首尾精确匹配，tr -d 彻底洗净换行、回车、空格，防止 RRD 解析报错
     rx=$(awk -F: -v ifn="$iface" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $1}' | tr -d '\r\n ')
     tx=$(awk -F: -v ifn="$iface" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $9}' | tr -d '\r\n ')
 
-    # 严格兜底
+    # 严格数字兜底
     [ -z "$rx" ] || echo "$rx" | grep -q '[^0-9]' && rx=0
     [ -z "$tx" ] || echo "$tx" | grep -q '[^0-9]' && tx=0
 
@@ -87,31 +88,31 @@ total_rx=0
 total_tx=0
 
 for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do
-    # 精确匹配行首，隔离 tun0 与 tun2，彻底洗净换行符
+    # 核心点：用 "^[[:space:]]*"tun"$" 精确隔离 tun0 和 tun2，杜绝模糊匹配带来的多行输出 Bug
     rx=$(awk -F: -v ifn="$tun" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $1}' | tr -d '\r\n ')
     tx=$(awk -F: -v ifn="$tun" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $9}' | tr -d '\r\n ')
 
-    # 安全校正：确保得到的必须是干净的纯数字
+    # 严格校验数字类型，如果非纯数字则强制转换为 0
     [ -z "$rx" ] || echo "$rx" | grep -q '[^0-9]' && rx=0
     [ -z "$tx" ] || echo "$tx" | grep -q '[^0-9]' && tx=0
 
     rrdtool update "$DB_DIR/$tun.rrd" N:"$rx":"$tx" 2>/dev/null || true
     
-    # 此时 $rx 和 $tx 绝对为单行纯数字，安全进行 Shell 算术累加
+    # 此时 $rx 和 $tx 绝对为干净的单行数字，安全进行 Shell 算术累加
     total_rx=$((total_rx + rx))
     total_tx=$((total_tx + tx))
 done
 
-# 如果专线聚合有产生数据，则将其更新至物理总表
+# 更新总专线聚合图表
 if [ "$total_rx" -gt 0 ] || [ "$total_tx" -gt 0 ]; then
     rrdtool update "$DB_DIR/TUN_TOTAL.rrd" N:"$total_rx":"$total_tx" 2>/dev/null || true
 fi
-OUTER_EOF
+EOF
 
 chmod +x /usr/bin/traffic_collector.sh
 
 echo "========= [4/6] 正在生成后端数据路由 CGI 接口服务 ========="
-cat << 'OUTER_EOF' > /www/cgi-bin/get_history_speed
+cat << 'EOF' > /www/cgi-bin/get_history_speed
 #!/bin/sh
 echo "Content-type: application/json"
 echo ""
@@ -141,9 +142,9 @@ for f in "$DB_DIR"/*.rrd; do
     echo "]"
 done
 echo "}"
-OUTER_EOF
+EOF
 
-cat << 'OUTER_EOF' > /www/cgi-bin/get_net_speed
+cat << 'EOF' > /www/cgi-bin/get_net_speed
 #!/bin/sh
 echo "Content-type: application/json"
 echo ""
@@ -153,13 +154,13 @@ awk 'NR > 2 {
     printf "\"%s\": {\"rx\": %s, \"tx\": %s},\n", $1, $2, $10
 }' /proc/net/dev | sed '$s/,$//'
 echo "}"
-OUTER_EOF
+EOF
 
 chmod +x /www/cgi-bin/get_history_speed
 chmod +x /www/cgi-bin/get_net_speed
 
 echo "========= [5/6] 正在生成前端高阶主页面 (index.html) ========="
-cat << 'OUTER_EOF' > /www/speed/index.html
+cat << 'EOF' > /www/speed/index.html
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -224,7 +225,7 @@ cat << 'OUTER_EOF' > /www/speed/index.html
                 <button onclick="changeHistoryRange('15d', 300, this)">15天</button>
                 <button onclick="changeHistoryRange('30d', 300, this)">1个月</button>
                 <button onclick="changeHistoryRange('90d', 1800, this)">3个月</button>
-                <button onclick="changeHistoryRange('180d', 1800, this)">6个月</button>
+                <button onclick="changeHistoryRange('180d', 1800, this).">6个月</button>
                 <button onclick="changeHistoryRange('365d', 7200, this)">1年</button>
             </div>
         </div>
@@ -310,16 +311,15 @@ cat << 'OUTER_EOF' > /www/speed/index.html
     </script>
 </body>
 </html>
-OUTER_EOF
+EOF
 
 echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务模块 ========="
-# 重新将纯净的采集指令挂载入宿主机 Crontab
 (crontab -l 2>/dev/null; echo "* * * * * /usr/bin/traffic_collector.sh") | crontab -
 
-# 清理宿主机文件描述符缓存，重新拉起验证
+# 同步文件并立即手动拉起验证
 sync
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 恭喜！数据层强力物理隔离版本部署成功！无错误退出。"
+echo " 恭喜！多 tun 扁平架构隔离版流量监控系统已成功执行强制复写安装！"
 echo "===================================================================="
