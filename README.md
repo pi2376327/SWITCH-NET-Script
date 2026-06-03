@@ -11,5 +11,5 @@ wget https://raw.githubusercontent.com/pi2376327/SWITCH-NET-Script/main/vps-init
 ```
 ## Network_Monitor_Deploy：
 ```
-wget https://raw.githubusercontent.com/pi2376327/SWITCH-NET-Script/main/network_monitor_deploy.sh && chmod +x network_monitor_deploy.sh && ./network_monitor_deploy.sh
+wget https://raw.githubusercontent.com/pi2376327/SWITCH-NET-Script/main/network_monitor_deploy.sh && chmod +x network_monitor_deploy.sh && ./network_monitor_deploy.sh && rm -f network_monitor_deploy.sh
 ```
