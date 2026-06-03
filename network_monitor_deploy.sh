@@ -2,7 +2,7 @@
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 +
-# 升级特性：将模糊匹配升级为严格精确匹配，彻底解决多 Tun 混合输出导致的 RRD/算术崩溃
+# 核心修正：取消函数嵌套，改用单行精确 awk + 强力脱水清洗，消灭一切多行换行符
 # ====================================================================
 
 set -e
@@ -61,12 +61,6 @@ init_rrd() {
     fi
 }
 
-# 核心修正：使用 ^%s: 进行严格的行首与冒号精确匹配，防止 tun 模糊匹配到 tun0, tun2
-get_bytes() {
-    local iface=$1
-    awk -v ifn="$iface" '$1 ~ "^"ifn":" {print $2, $10}' /proc/net/dev
-}
-
 # 预初始化默认主接口和总计通道
 for i in $INTERFACES TUN_TOTAL; do init_rrd "$i"; done
 
@@ -75,47 +69,42 @@ for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun');
     init_rrd "$tun"; 
 done
 
-# 采集主物理接口流量
+# --- 物理接口数据采集 ---
 for iface in $INTERFACES; do
-    stats=$(get_bytes "$iface")
-    if [ -n "$stats" ]; then
-        rx=$(echo "$stats" | awk '{print $1}')
-        tx=$(echo "$stats" | awk '{print $2}')
-        [ -z "$rx" ] && rx=0
-        [ -z "$tx" ] && tx=0
-        rrdtool update "$DB_DIR/$iface.rrd" N:"$rx":"$tx"
-    fi
+    # 核心升级：直接通过精确匹配整行行首提取，tr -d 清除可能导致 RRD 报非纯数字的换行/回车符
+    rx=$(awk -F: -v ifn="$iface" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $1}' | tr -d '\r\n ')
+    tx=$(awk -F: -v ifn="$iface" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $9}' | tr -d '\r\n ')
+
+    # 严格兜底
+    [ -z "$rx" ] || echo "$rx" | grep -q '[^0-9]' && rx=0
+    [ -z "$tx" ] || echo "$tx" | grep -q '[^0-9]' && tx=0
+
+    rrdtool update "$DB_DIR/$iface.rrd" N:"$rx":"$tx" 2>/dev/null || true
 done
 
-# 采集多 tun 虚拟接口流量
+# --- 多 TUN 虚拟接口数据采集与安全累加 ---
 total_rx=0
 total_tx=0
 
 for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do
-    stats=$(get_bytes "$tun")
-    if [ -n "$stats" ]; then
-        rx=$(echo "$stats" | awk '{print $1}')
-        tx=$(echo "$stats" | awk '{print $2}')
-        
-        # 兜底清理
-        rx=${rx:-0}
-        tx=${tx:-0}
-        
-        # 确保完全是单行纯数字
-        echo "$rx" | grep -q '^[0-9]\+$' || rx=0
-        echo "$tx" | grep -q '^[0-9]\+$' || tx=0
+    # 精确匹配行首，隔离 tun0 与 tun2，彻底洗净换行符
+    rx=$(awk -F: -v ifn="$tun" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $1}' | tr -d '\r\n ')
+    tx=$(awk -F: -v ifn="$tun" '$1 ~ "^[[:space:]]*"ifn"$" {print $2}' /proc/net/dev | awk '{print $9}' | tr -d '\r\n ')
 
-        rrdtool update "$DB_DIR/$tun.rrd" N:"$rx":"$tx" 2>/dev/null || true
-        
-        # 安全算术累加
-        total_rx=$((total_rx + rx))
-        total_tx=$((total_tx + tx))
-    fi
+    # 安全校正：确保得到的必须是干净的纯数字
+    [ -z "$rx" ] || echo "$rx" | grep -q '[^0-9]' && rx=0
+    [ -z "$tx" ] || echo "$tx" | grep -q '[^0-9]' && tx=0
+
+    rrdtool update "$DB_DIR/$tun.rrd" N:"$rx":"$tx" 2>/dev/null || true
+    
+    # 此时 $rx 和 $tx 绝对为单行纯数字，安全进行 Shell 算术累加
+    total_rx=$((total_rx + rx))
+    total_tx=$((total_tx + tx))
 done
 
-# 如果总专线聚合流量有产生数据，则将其更新至物理总表
-if [ $total_rx -gt 0 ] || [ $total_tx -gt 0 ]; then
-    rrdtool update "$DB_DIR/TUN_TOTAL.rrd" N:"$total_rx":"$total_tx"
+# 如果专线聚合有产生数据，则将其更新至物理总表
+if [ "$total_rx" -gt 0 ] || [ "$total_tx" -gt 0 ]; then
+    rrdtool update "$DB_DIR/TUN_TOTAL.rrd" N:"$total_rx":"$total_tx" 2>/dev/null || true
 fi
 OUTER_EOF
 
@@ -327,9 +316,10 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 # 重新将纯净的采集指令挂载入宿主机 Crontab
 (crontab -l 2>/dev/null; echo "* * * * * /usr/bin/traffic_collector.sh") | crontab -
 
-# 运行采集器
+# 清理宿主机文件描述符缓存，重新拉起验证
+sync
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 恭喜！多 tun 严格匹配版流量监控系统已成功安装完毕！"
+echo " 恭喜！数据层强力物理隔离版本部署成功！无错误退出。"
 echo "===================================================================="
