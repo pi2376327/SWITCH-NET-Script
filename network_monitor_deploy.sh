@@ -4,7 +4,7 @@
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
 # 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1
 # 修复日志：完美过滤 RRDtool 的 nan 空值输出，转换为标准 0，彻底根治前端 JSON 报错空白
-# 视觉优化：将 X/Y 轴的轴线颜色替换为高显度、清晰不刺眼的浅色系，大幅提升暗色背景下的可视性
+# 视觉优化：X/Y轴线与纵坐标横格线全面加粗并切换为浅灰色，大幅强化与深色背景对比度
 # ====================================================================
 
 set -e
@@ -130,7 +130,7 @@ OUTER_EOF
 sed -i "s/TARGET_WAN/$GLOBAL_WAN/g" /usr/bin/traffic_collector.sh
 chmod +x /usr/bin/traffic_collector.sh
 
-echo "========= [4/6] 正在生成后端数据路由 CGI 接口服务 ========="
+echo "========= [4/6] 正在生成后端数据路由 CGI 接口 service ========="
 cat << 'OUTER_EOF' > /www/cgi-bin/get_history_speed
 #!/bin/sh
 echo "Content-type: application/json"
@@ -150,7 +150,6 @@ for f in "$DB_DIR"/*.rrd; do
     if [ $first -ne 1 ]; then echo ","; fi
     first=0
     echo "\"$iface\": ["
-    # 核心安全增强：通过 awk 判定，如果值为 nan 或 -nan，直接强转输出为 0，确保 standard JSON 的合法性
     rrdtool fetch "$f" AVERAGE -s "$TIME_RANGE" -e "now" -r "$RESOLUTION" | awk '
         NR > 2 {
             if ($1 != "") {
@@ -329,15 +328,33 @@ cat << 'OUTER_EOF' > /www/speed/index.html
                     type: 'category', 
                     boundaryGap: false, 
                     data: labels, 
-                    axisLine: { lineStyle: { color: '#475569' } }, // 优化点：轴线颜色加亮，从 #1e2d4a 调整为 #475569，与背景区分更清晰
+                    axisLine: { 
+                        lineStyle: { 
+                            color: '#94a3b8', // 优化点：轴线变更为更亮丽的浅灰色 (Slate 400)
+                            width: 2          // 优化点：轴线加粗至 2px 增强边界识别度
+                        } 
+                    }, 
                     axisLabel: { color: '#64748b' } 
                 },
                 yAxis: { 
                     type: 'value', 
                     name: 'Mbps', 
                     nameTextStyle: { color: '#64748b' }, 
-                    splitLine: { lineStyle: { color: 'rgba(71, 85, 105, 0.2)', type: 'dashed' } }, // 优化点：参考加亮轴线同步微调背景虚线，使其更有轮廓感
-                    axisLine: { show: true, lineStyle: { color: '#475569' } }, // 优化点：Y 轴线同步加亮为 #475569
+                    splitLine: { 
+                        show: true,
+                        lineStyle: { 
+                            color: 'rgba(148, 163, 184, 0.35)', // 优化点：背景横向分割线加亮，采用浅灰高透光纯色
+                            type: 'solid',                      // 优化点：虚线改实线，增强视觉对齐感
+                            width: 1.5                          // 优化点：网格横线加粗至 1.5px
+                        } 
+                    }, 
+                    axisLine: { 
+                        show: true, 
+                        lineStyle: { 
+                            color: '#94a3b8', // 优化点：Y轴线同步变更为浅灰色
+                            width: 2          // 优化点：Y轴线同步加粗至 2px
+                        } 
+                    }, 
                     axisLabel: { color: '#64748b' }, 
                     minInterval: 0.5 
                 },
@@ -367,7 +384,7 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 恭喜！跨平台流量监控系统已成功完成纯净安装与覆盖调整！"
+echo " 恭喜！高对比度优化的跨平台流量监控系统已成功完成覆盖调整！"
 echo "--------------------------------------------------------------------"
 echo " 访问地址 : http://[你的路由器IP]/speed/"
 echo " 默认账号 : admin"
