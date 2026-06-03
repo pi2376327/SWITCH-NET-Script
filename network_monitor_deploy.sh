@@ -2,8 +2,8 @@
 # ====================================================================
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
-# 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1
-# 修复日志：重构前端 ECharts 样式，补全全网格线，将轴文字与网格线改为浅灰，横轴时间戳竖排展示
+# 升级特性：引入 CPU 架构精准判定技术，x86 绑定 eth0，ARM 绑定 eth1
+# 修复日志：完美过滤 RRDtool 的 nan 空值输出，转换为标准 0，彻底根治前端 JSON 报错空白
 # ====================================================================
 
 set -e
@@ -149,6 +149,7 @@ for f in "$DB_DIR"/*.rrd; do
     if [ $first -ne 1 ]; then echo ","; fi
     first=0
     echo "\"$iface\": ["
+    # 核心安全增强：通过 awk 判定，如果值为 nan 或 -nan，直接强转输出为 0，确保标准 JSON 的合法性
     rrdtool fetch "$f" AVERAGE -s "$TIME_RANGE" -e "now" -r "$RESOLUTION" | awk '
         NR > 2 {
             if ($1 != "") {
@@ -190,7 +191,7 @@ cat << 'OUTER_EOF' > /www/speed/index.html
     <style>
         :root {
             --bg-main: #0b111e; --bg-card: #121b2e; --border-color: #1e2d4a;
-            --text-main: #f1f5f9; --text-muted: #94a3b8; --theme-blue: #38bdf8;
+            --text-main: #f1f5f9; --text-muted: #64748b; --theme-blue: #38bdf8;
             --theme-green: #00e676; --theme-red: #ff3d00;
         }
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg-main); color: var(--text-main); padding: 30px; margin: 0; -webkit-font-smoothing: antialiased; }
@@ -204,16 +205,16 @@ cat << 'OUTER_EOF' > /www/speed/index.html
         .header-panel { text-align: center; margin-bottom: 25px; }
         h1 { font-size: 2.2rem; font-weight: 700; letter-spacing: 1px; background: linear-gradient(to right, #38bdf8, #00e676); -webkit-background-clip: text; -webkit-text-fill-color: transparent; margin: 0; }
         .navigation-tabs { display: flex; justify-content: center; gap: 8px; margin-bottom: 25px; }
-        .nav-tab { background: #16223b; color: #64748b; border: 1px solid var(--border-color); padding: 10px 24px; font-size: 0.95rem; font-weight: 600; border-radius: 6px; cursor: pointer; transition: 0.2s; }
+        .nav-tab { background: #16223b; color: var(--text-muted); border: 1px solid var(--border-color); padding: 10px 24px; font-size: 0.95rem; font-weight: 600; border-radius: 6px; cursor: pointer; transition: 0.2s; }
         .nav-tab:hover { color: var(--text-main); }
         .nav-tab.active { background: #1e2d4a; color: var(--theme-green); border-color: var(--theme-green); box-shadow: 0 4px 15px rgba(0,230,118,0.15); }
         .btn-wrapper { text-align: center; width: 100%; margin-bottom: 30px; display: none; }
         .control-row { display: inline-flex; gap: 4px; background: var(--bg-card); border: 1px solid var(--border-color); padding: 5px; border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3); flex-wrap: wrap; justify-content: center; }
-        .control-row button { background: transparent; border: none; color: #64748b; padding: 8px 14px; font-size: 0.85rem; font-weight: 500; border-radius: 5px; cursor: pointer; }
+        .control-row button { background: transparent; border: none; color: var(--text-muted); padding: 8px 14px; font-size: 0.85rem; font-weight: 500; border-radius: 5px; cursor: pointer; }
         .control-row button:hover { color: var(--text-main); }
         .control-row button.active { background: #1e2d4a; color: var(--theme-blue); font-weight: 600; }
         .chart-grid { display: grid; grid-template-columns: 1fr; gap: 25px; }
-        .chart-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; height: 400px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2); }
+        .chart-card { background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; height: 380px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2); }
         #realtime-grid { display: grid; } #history-grid { display: none; }
     </style>
 </head>
@@ -316,37 +317,18 @@ cat << 'OUTER_EOF' > /www/speed/index.html
             } catch (e) { console.error(e); }
         }
         function changeHistoryRange(range, resolution, btn) { currentRange = range; currentResolution = resolution; document.querySelectorAll('.control-row button').forEach(b => b.classList.remove('active')); btn.classList.add('active'); document.getElementById('history-grid').innerHTML = ''; historyCharts = {}; loadHistoryData(); }
-        function renderEChart(chartInstance, iface, labels, rx, tx, isRealtime) {
+        function renderEChart(chartInstance, iface, labels, rx, tx, isSmooth) {
             let labelName = nameMapping[iface] || `TUN口流量图 (${iface})`;
             chartInstance.setOption({
                 backgroundColor: 'transparent', title: { text: labelName, left: 'center', top: 5, textStyle: { color: '#f1f5f9', fontSize: 16, fontWeight: 'bold' } },
                 tooltip: { trigger: 'axis', backgroundColor: 'rgba(18, 27, 46, 0.95)', borderColor: '#1e2d4a', textStyle: { color: '#f1f5f9' }, boxShadow: '0 8px 32px rgba(0,0,0,0.3)' },
-                legend: { data: ['下载 (RX)', '上行 (TX)'], bottom: 5, textStyle: { color: '#94a3b8', fontWeight: 500 } },
-                grid: { top: 70, bottom: isRealtime ? 65 : 85, left: 65, right: 30 },
-                xAxis: { 
-                    type: 'category', 
-                    boundaryGap: false, 
-                    data: labels, 
-                    axisLine: { lineStyle: { color: '#1e2d4a' } }, 
-                    axisLabel: { 
-                        color: '#94a3b8',
-                        rotate: isRealtime ? 0 : 90, // 仅在历史查看模式下实现横坐标垂直竖排展示
-                        interval: isRealtime ? 'auto' : 0 // 历史模式下强制展示每个网格标记点
-                    },
-                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'solid' } } // 补全纵向网格线线
-                },
-                yAxis: { 
-                    type: 'value', 
-                    name: 'Mbps', 
-                    nameTextStyle: { color: '#94a3b8' }, 
-                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'dashed' } }, // 调整横向网格线为高辨识度浅灰色
-                    axisLine: { show: true, lineStyle: { color: '#1e2d4a' } }, 
-                    axisLabel: { color: '#94a3b8' }, 
-                    minInterval: 0.5 
-                },
+                legend: { data: ['下载 (RX)', '上行 (TX)'], bottom: 5, textStyle: { color: '#64748b', fontWeight: 500 } },
+                grid: { top: 70, bottom: 65, left: 65, right: 30 },
+                xAxis: { type: 'category', boundaryGap: false, data: labels, axisLine: { lineStyle: { color: '#1e2d4a' } }, axisLabel: { color: '#64748b' } },
+                yAxis: { type: 'value', name: 'Mbps', nameTextStyle: { color: '#64748b' }, splitLine: { lineStyle: { color: 'rgba(30, 45, 74, 0.5)', type: 'dashed' } }, axisLine: { show: true, lineStyle: { color: '#1e2d4a' } }, axisLabel: { color: '#64748b' }, minInterval: 0.5 },
                 series: [
-                    { name: '下载 (RX)', type: 'line', smooth: isRealtime, showSymbol: false, itemStyle: { color: '#00e676' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(0, 230, 118, 0.15)' }, { offset: 1, color: 'rgba(0, 230, 118, 0.0)' }]) }, data: rx },
-                    { name: '上行 (TX)', type: 'line', smooth: isRealtime, showSymbol: false, itemStyle: { color: '#ff3d00' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(255, 61, 0, 0.1)' }, { offset: 1, color: 'rgba(255, 61, 0, 0.0)' }]) }, data: tx }
+                    { name: '下载 (RX)', type: 'line', smooth: isSmooth, showSymbol: false, itemStyle: { color: '#00e676' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(0, 230, 118, 0.15)' }, { offset: 1, color: 'rgba(0, 230, 118, 0.0)' }]) }, data: rx },
+                    { name: '上行 (TX)', type: 'line', smooth: isSmooth, showSymbol: false, itemStyle: { color: '#ff3d00' }, lineStyle: { width: 2 }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: 'rgba(255, 61, 0, 0.1)' }, { offset: 1, color: 'rgba(255, 61, 0, 0.0)' }]) }, data: tx }
                 ]
             });
         }
@@ -370,5 +352,9 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 修改部署完成！最新网格优化与轴文字旋转配置已注入前端模块！"
+echo " 恭喜！跨平台流量监控系统已成功完成纯净安装与覆盖调整！"
+echo "--------------------------------------------------------------------"
+echo " 访问地址 : http://[你的路由器IP]/speed/"
+echo " 默认账号 : admin"
+echo " 默认密码 : admin888"
 echo "===================================================================="
