@@ -3,7 +3,7 @@
 # SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
 # 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1
-# 修复日志：重构前端 ECharts 样式，补全全网格线，将轴文字与网格线改为浅灰，横轴时间戳竖排展示
+# 修复日志：锁定脚本尾部默认登录凭据提示文本，确保版本迭代时信息不丢失
 # ====================================================================
 
 set -e
@@ -330,16 +330,16 @@ cat << 'OUTER_EOF' > /www/speed/index.html
                     axisLine: { lineStyle: { color: '#1e2d4a' } }, 
                     axisLabel: { 
                         color: '#94a3b8',
-                        rotate: isRealtime ? 0 : 90, // 仅在历史查看模式下实现横坐标垂直竖排展示
-                        interval: isRealtime ? 'auto' : 0 // 历史模式下强制展示每个网格标记点
+                        rotate: isRealtime ? 0 : 90,
+                        interval: isRealtime ? 'auto' : 0
                     },
-                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'solid' } } // 补全纵向网格线线
+                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'solid' } }
                 },
                 yAxis: { 
                     type: 'value', 
                     name: 'Mbps', 
                     nameTextStyle: { color: '#94a3b8' }, 
-                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'dashed' } }, // 调整横向网格线为高辨识度浅灰色
+                    splitLine: { show: true, lineStyle: { color: 'rgba(148, 163, 184, 0.15)', type: 'dashed' } },
                     axisLine: { show: true, lineStyle: { color: '#1e2d4a' } }, 
                     axisLabel: { color: '#94a3b8' }, 
                     minInterval: 0.5 
@@ -370,4 +370,9 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 修改部署完成！最新网格优化与轴文字旋转配置已注入前端模块
+echo " 流量监控系统部署/覆盖成功！请使用以下默认凭据访问前端控制台："
+echo " ------------------------------------------------------------------"
+echo " 访问路径: http://路由器IP/speed/"
+echo " 管理账号: admin"
+echo " 访问密码: admin888"
+echo "===================================================================="
