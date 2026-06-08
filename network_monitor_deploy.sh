@@ -1,15 +1,17 @@
 #!/bin/sh
 # ====================================================================
-# SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本
+# SDWAN CPE 流量监控系统 一键全自动纯净/覆盖部署脚本 (Bug修复版)
 # 适用环境：OpenWrt 21.02 / 22.03 / 23.05 + (完美兼容 ARM / x86 架构)
-# 升级特性：引入 CPU 架构精确判定技术，x86 绑定 eth0，ARM 绑定 eth1
-# 修复日志：完美过滤 RRDtool 的 nan 空值输出，转换为标准 0，彻底根治前端 JSON 报错空白
-# 视觉优化：X/Y轴线与纵坐标横格线全面加粗并切换为浅灰色，大幅强化与深色背景对比度
+# 修复日志：
+#   1. 彻底将 RRD 数据库由 COUNTER 变更为 GAUGE 模式，由后台直接计算精确的 Mbps 存入。
+#   2. 根治了长周期（2天/7天/1年）因接口重启或累加导致的假溢出、天价尖峰撑爆Y轴的 Bug。
+#   3. 精简前后端换算逻辑，避免多重乘除造成的数据量级失真。
+# 视觉保留：X/Y轴线与纵坐标横格线全面加粗并切换为浅灰色，高对比度。
 # ====================================================================
 
 set -e
 
-echo "========= [1/6] 正在执行旧版本残余清理（强制复写准备） ========="
+echo "========= [1/6] 正在执行旧版本残余清理及数据库重置 ========="
 
 # 1. 安全从计划任务中剔除旧的采集器
 if crontab -l 2>/dev/null | grep -q "traffic_collector.sh"; then
@@ -20,7 +22,7 @@ fi
 # 2. 强制终止当前可能正在后台运行的旧版采集实例
 killall traffic_collector.sh 2>/dev/null || true
 
-# 3. 彻底清空历史安装路径及旧的前端残留文件
+# 3. 彻底清空历史安装路径及旧的前端残留文件（必须删除旧rrd以应用新GAUGE结构）
 echo "正在强力抹除旧系统文件与 RRD 历史数据库..."
 rm -rf /usr/share/traffic_rrd
 rm -f /usr/bin/traffic_collector.sh
@@ -65,15 +67,19 @@ echo "========= [3/6] 正在生成后台定时流量统计采集器 (traffic_col
 cat << 'OUTER_EOF' > /usr/bin/traffic_collector.sh
 #!/bin/sh
 DB_DIR="/usr/share/traffic_rrd"
+CACHE_DIR="/tmp/traffic_cache"
 mkdir -p "$DB_DIR"
+mkdir -p "$CACHE_DIR"
+
 INTERFACES="TARGET_WAN br-lan"
 
+# 变更核心：采用 GAUGE 存储直接换算好的 Mbps 速率
 init_rrd() {
     local iface=$1
     if [ ! -f "$DB_DIR/$iface.rrd" ]; then
         rrdtool create "$DB_DIR/$iface.rrd" --step 60 \
-            DS:rx:COUNTER:120:0:U \
-            DS:tx:COUNTER:120:0:U \
+            DS:rx:GAUGE:120:0:U \
+            DS:tx:GAUGE:120:0:U \
             RRA:AVERAGE:0.5:1:4320 \
             RRA:AVERAGE:0.5:5:8640 \
             RRA:AVERAGE:0.5:30:5760 \
@@ -86,51 +92,81 @@ get_bytes() {
     awk -v ifn="$iface" '$1 ~ "^"ifn":" {print $2, $10}' /proc/net/dev
 }
 
-for i in $INTERFACES TUN_TOTAL; do init_rrd "$i"; done
+# 计算当前的 Mbps 速率
+calc_speed() {
+    local iface=$1
+    local current_rx=$2
+    local current_tx=$3
+    local cache_file="$CACHE_DIR/$iface.cache"
+    
+    if [ -f "$cache_file" ]; then
+        read -r last_time last_rx last_tx < "$cache_file"
+        local now=$(date +%s)
+        local time_delta=$((now - last_time))
+        if [ $time_delta -gt 0 ] && [ $current_rx -ge $last_rx ] && [ $current_tx -ge $last_tx ]; then
+            # 计算 Mbps: (Bytes_delta * 8) / time_delta / 1024 / 1024
+            # 考虑 shell 不支持浮点数，先放大 100 倍计算再转为浮点字符串
+            local rx_speed_scaled=$(( (current_rx - last_rx) * 8 * 100 / time_delta / 1024 / 1024 ))
+            local tx_speed_scaled=$(( (current_tx - last_tx) * 8 * 100 / time_delta / 1024 / 1024 ))
+            
+            rx_speed=$(awk -v s=$rx_speed_scaled 'BEGIN {printf "%.2f", s/100}')
+            tx_speed=$(awk -v s=$tx_speed_scaled 'BEGIN {printf "%.2f", s/100}')
+        else
+            rx_speed="0.00"
+            tx_speed="0.00"
+        fi
+    else
+        rx_speed="0.00"
+        tx_speed="0.00"
+    fi
+    echo "$(date +%s) $current_rx $current_tx" > "$cache_file"
+}
 
+# 初始化物理和虚拟总线数据库
+for i in $INTERFACES TUN_TOTAL; do init_rrd "$i"; done
 for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do 
     init_rrd "$tun"; 
 done
 
+# 采集标准网口
 for iface in $INTERFACES; do
     stats=$(get_bytes "$iface")
     if [ -n "$stats" ]; then
         rx=$(echo "$stats" | awk '{print $1}')
         tx=$(echo "$stats" | awk '{print $2}')
-        [ -z "$rx" ] && rx=0
-        [ -z "$tx" ] && tx=0
-        rrdtool update "$DB_DIR/$iface.rrd" N:"$rx":"$tx"
+        calc_speed "$iface" "$rx" "$tx"
+        rrdtool update "$DB_DIR/$iface.rrd" N:"$rx_speed":"$tx_speed"
     fi
 done
 
-total_rx=0
-total_tx=0
-
+# 采集所有的 TUN 接口并精密聚合
+total_tun_rx=0
+total_tun_tx=0
 for tun in $(awk -F: 'NR>2 {print $1}' /proc/net/dev | tr -d ' ' | grep '^tun'); do
     stats=$(get_bytes "$tun")
     if [ -n "$stats" ]; then
         rx=$(echo "$stats" | awk '{print $1}')
         tx=$(echo "$stats" | awk '{print $2}')
-        rx=${rx:-0}
-        tx=${tx:-0}
-        echo "$rx" | grep -q '^[0-9]\+$' || rx=0
-        echo "$tx" | grep -q '^[0-9]\+$' || tx=0
-        rrdtool update "$DB_DIR/$tun.rrd" N:"$rx":"$tx" 2>/dev/null || true
-        total_rx=$((total_rx + rx))
-        total_tx=$((total_tx + tx))
+        [ -z "$rx" ] && rx=0
+        [ -z "$tx" ] && tx=0
+        total_tun_rx=$((total_tun_rx + rx))
+        total_tun_tx=$((total_tun_tx + tx))
+        
+        calc_speed "$tun" "$rx" "$tx"
+        rrdtool update "$DB_DIR/$tun.rrd" N:"$rx_speed":"$tx_speed" 2>/dev/null || true
     fi
 done
 
-if [ $total_rx -gt 0 ] || [ $total_tx -gt 0 ]; then
-    rrdtool update "$DB_DIR/TUN_TOTAL.rrd" N:"$total_rx":"$total_tx"
-fi
+# 统一更新 SDWAN 专线总流量总成
+calc_speed "TUN_TOTAL" "$total_tun_rx" "$total_tun_tx"
+rrdtool update "$DB_DIR/TUN_TOTAL.rrd" N:"$rx_speed":"$tx_speed"
 OUTER_EOF
 
 # 精准替换采集器中的 WAN 接口标识
 sed -i "s/TARGET_WAN/$GLOBAL_WAN/g" /usr/bin/traffic_collector.sh
 chmod +x /usr/bin/traffic_collector.sh
 
-echo "========= [4/6] 正在生成后端数据路由 CGI 接口 service ========="
+echo "========= [4/6] 正在生成后端数据路由 CGI 接口服务 ========="
 cat << 'OUTER_EOF' > /www/cgi-bin/get_history_speed
 #!/bin/sh
 echo "Content-type: application/json"
@@ -150,13 +186,14 @@ for f in "$DB_DIR"/*.rrd; do
     if [ $first -ne 1 ]; then echo ","; fi
     first=0
     echo "\"$iface\": ["
+    # 核心调整：因为 RRDtool 里已经是准确的 Mbps 浮点数，直接输出，过滤 nan 即可
     rrdtool fetch "$f" AVERAGE -s "$TIME_RANGE" -e "now" -r "$RESOLUTION" | awk '
         NR > 2 {
             if ($1 != "") {
                 sub(/:/, "", $1);
-                val_rx = ($2 ~ /nan/) ? 0 : $2 * 8;
-                val_tx = ($3 ~ /nan/) ? 0 : $3 * 8;
-                printf "{\x22time\x22: \x22%s\x22, \x22rx\x22: %.0f, \x22tx\x22: %.0f},\n", $1, val_rx, val_tx
+                val_rx = ($2 ~ /nan/) ? 0 : $2;
+                val_tx = ($3 ~ /nan/) ? 0 : $3;
+                printf "{\x22time\x22: \x22%s\x22, \x22rx\x22: %.2f, \x22tx\x22: %.2f},\n", $1, val_rx, val_tx
             }
         }
     ' | sed '$s/,$//'
@@ -310,7 +347,10 @@ cat << 'OUTER_EOF' > /www/speed/index.html
                 activeIfaces.forEach(iface => {
                     const records = data[iface] || [];
                     const labels = records.map(r => { let d = new Date(parseInt(r.time.replace(':', '')) * 1000); return currentResolution >= 300 ? `${d.getMonth()+1}-${d.getDate()} ${d.getHours()}:${(d.getMinutes()<10?'0':'')+d.getMinutes()}` : d.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}); });
-                    const rxData = records.map(r => parseFloat((r.rx / 1024 / 1024).toFixed(2))); const txData = records.map(r => parseFloat((r.tx / 1024 / 1024).toFixed(2)));
+                    
+                    // 核心修正：因为后台写入已是标准 Mbps 速率，这里直接提取，不需要再做除法
+                    const rxData = records.map(r => r.rx); const txData = records.map(r => r.tx);
+                    
                     if (!historyCharts[iface]) { const card = document.createElement('div'); card.className = 'chart-card'; card.id = `hi-chart-${iface}`; gridContainer.appendChild(card); historyCharts[iface] = echarts.init(card, 'dark'); }
                     renderEChart(historyCharts[iface], iface, labels, rxData, txData, false);
                 });
@@ -328,12 +368,7 @@ cat << 'OUTER_EOF' > /www/speed/index.html
                     type: 'category', 
                     boundaryGap: false, 
                     data: labels, 
-                    axisLine: { 
-                        lineStyle: { 
-                            color: '#94a3b8', // 优化点：轴线变更为更亮丽的浅灰色 (Slate 400)
-                            width: 2          // 优化点：轴线加粗至 2px 增强边界识别度
-                        } 
-                    }, 
+                    axisLine: { lineStyle: { color: '#94a3b8', width: 2 } }, 
                     axisLabel: { color: '#64748b' } 
                 },
                 yAxis: { 
@@ -342,19 +377,9 @@ cat << 'OUTER_EOF' > /www/speed/index.html
                     nameTextStyle: { color: '#64748b' }, 
                     splitLine: { 
                         show: true,
-                        lineStyle: { 
-                            color: 'rgba(148, 163, 184, 0.35)', // 优化点：背景横向分割线加亮，采用浅灰高透光纯色
-                            type: 'solid',                      // 优化点：虚线改实线，增强视觉对齐感
-                            width: 1.5                          // 优化点：网格横线加粗至 1.5px
-                        } 
+                        lineStyle: { color: 'rgba(148, 163, 184, 0.35)', type: 'solid', width: 1.5 } 
                     }, 
-                    axisLine: { 
-                        show: true, 
-                        lineStyle: { 
-                            color: '#94a3b8', // 优化点：Y轴线同步变更为浅灰色
-                            width: 2          // 优化点：Y轴线同步加粗至 2px
-                        } 
-                    }, 
+                    axisLine: { show: true, lineStyle: { color: '#94a3b8', width: 2 } }, 
                     axisLabel: { color: '#64748b' }, 
                     minInterval: 0.5 
                 },
@@ -384,7 +409,7 @@ echo "========= [6/6] 正在向 OpenWrt 重新注册内核级高频计划任务�
 sh /usr/bin/traffic_collector.sh
 
 echo "===================================================================="
-echo " 恭喜！高对比度优化的跨平台流量监控系统已成功完成覆盖调整！"
+echo " 恭喜！专线监控系统已部署完成！"
 echo "--------------------------------------------------------------------"
 echo " 访问地址 : http://[你的路由器IP]/speed/"
 echo " 默认账号 : admin"
