@@ -13,3 +13,7 @@ wget https://raw.githubusercontent.com/pi2376327/SWITCH-NET-Script/main/vps-init
 wget https://raw.githubusercontent.com/pi2376327/SWITCH-NET-Script/main/network_monitor_deploy.sh && chmod +x network_monitor_deploy.sh && ./network_monitor_deploy.sh && rm -f network_monitor_deploy.sh
 ```
 
+## qos_Deploy：
+```
+wget https://raw.githubusercontent.com/pi2376327/SWITCH-NET-Script/main/qos_deploy.sh && chmod +x qos_deploy.sh && ./qos_deploy.sh && rm -f qos_deploy.sh
+```
