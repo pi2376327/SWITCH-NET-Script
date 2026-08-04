@@ -27,6 +27,8 @@ echo net.core.wmem_max = 33554432 >> /etc/sysctl.conf
 echo net.ipv4.tcp_rmem = 4096 87380 33554432 >> /etc/sysctl.conf
 echo net.ipv4.tcp_wmem = 4096 16384 33554432 >> /etc/sysctl.conf
 echo net.ipv4.tcp_moderate_rcvbuf = 1 >> /etc/sysctl.conf
+echo net.netfilter.nf_conntrack_max = 262144 >> /etc/sysctl.conf
+echo net.netfilter.nf_conntrack_buckets = 262144 >> /etc/sysctl.conf
 sysctl -p
 
 read -n 1 -p "continue [y/n] > " char
