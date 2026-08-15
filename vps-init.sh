@@ -518,3 +518,6 @@ fi
 
 #install sdwan-web management
 mkdir /opt/sdwan-web && cd /opt/sdwan-web
+wget https://github.com/pi2376327/SWITCH-NET-Script/releases/download/sdwan/SDWAN-Web.zip
+unzip SDWAN-Web.zip -d /opt/sdwan-web
+chmod +x install.sh && bash install.sh
