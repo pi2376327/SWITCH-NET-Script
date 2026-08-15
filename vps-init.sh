@@ -517,3 +517,4 @@ else
 fi
 
 #install sdwan-web management
+mkdir /opt/sdwan-web && cd /opt/sdwan-web
