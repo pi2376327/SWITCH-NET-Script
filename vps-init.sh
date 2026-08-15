@@ -9,7 +9,7 @@ if [ "$char" = n ];then exit 0;fi
 
 timedatectl set-timezone Asia/Shanghai
 apt install -y ca-certificates openvpn wireguard wget iptables vim iperf3 dnsutils  traceroute tcpdump curl ipset lsof bash-completion smartdns cron lrzsz telnet zabbix-agent2 fping linux-headers-$(uname -r) build-essential dkms
-apt install -y openvpn-dco-dkms
+apt install -y openvpn-dco-dkms unzip
 
 #Turn on ip_foward,bbr-acceleration，turn off urpf
 sed -i "/net.ipv4.ip_forward=1/d" /etc/sysctl.conf
