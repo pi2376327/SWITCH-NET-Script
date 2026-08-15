@@ -515,3 +515,5 @@ if lsof -i:1199 >>/dev/null; then
 else
         echo "Openvpn startup failures,Smartdns waiting for launch"
 fi
+
+#install sdwan-web management
